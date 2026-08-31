@@ -1,71 +1,51 @@
 # Cursor Usage Monitor
 
-Tampermonkey userscript that overlays real Cursor Models and API spending limits on [cursor.com/dashboard/spending](https://cursor.com/dashboard/spending).
+[![Install](https://img.shields.io/badge/install-userscript-2ea44f)](https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js)
+[![Tampermonkey](https://img.shields.io/badge/Tampermonkey-compatible-black?logo=tampermonkey&logoColor=white)](https://www.tampermonkey.net/)
+[![Violentmonkey](https://img.shields.io/badge/Violentmonkey-compatible-3b3b3b)](https://violentmonkey.github.io/)
+[![License: MIT](https://img.shields.io/github/license/AryaPaw/cursor-usage-monitor)](LICENSE)
 
-The dashboard only shows percentages. This script reads the signed-in session's `/api/usage-summary` response, reconstructs the missing first-party dollar cap, and shows used / limit / remaining for:
+Overlay on [cursor.com/dashboard/spending](https://cursor.com/dashboard/spending): real dollar limits for Cursor Models, API / Other Models, and Total. The dashboard only shows percents; the script reads `/api/usage-summary` in your session and fills in used / limit / remaining.
 
-- Cursor Models
-- API / Other Models
-- Total
+[Install cursor-usage-monitor.user.js](https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js)
+
+<p align="center">
+  <img src="docs/screenshot.png" alt="Cursor Usage overlay on the spending dashboard" width="320">
+</p>
 
 ## Install
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/) (or [Violentmonkey](https://violentmonkey.github.io/)).
-2. Open this raw file so the manager can install it:
+1. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/).
+2. Open the [raw userscript](https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js) and confirm.
+3. Open [the spending dashboard](https://cursor.com/dashboard/spending) while signed in.
 
-   [Install cursor-usage-monitor.user.js](https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js)
-
-3. Confirm the install prompt.
-4. Open [https://cursor.com/dashboard/spending](https://cursor.com/dashboard/spending) while signed in.
-
-If the browser only shows source instead of an install prompt, copy the raw URL into Tampermonkey: **Utilities → Install from URL**.
-
-Direct install helper (Tampermonkey):
-
-https://www.tampermonkey.net/script_installation.php#url=https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js
+If the browser shows source instead of an install prompt, paste the raw URL into Tampermonkey: **Utilities → Install from URL**. Tampermonkey helper: [script installation](https://www.tampermonkey.net/script_installation.php#url=https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js).
 
 ## Auto-update
 
-The script header points Tampermonkey at this repository:
+`@updateURL` and `@downloadURL` point at `main`:
 
-```
-@updateURL    https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js
-@downloadURL  https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js
-```
+https://github.com/AryaPaw/cursor-usage-monitor/raw/main/cursor-usage-monitor.user.js
 
-Updates happen when `@version` in that file increases. Keep Tampermonkey's **Check for updates** enabled (default). After a release, Tampermonkey usually picks it up within a day, or immediately via the script's **Check for updates** action.
+Bump `@version` and push. Tampermonkey checks periodically, or use **Check for updates** on the script.
 
-## How the first-party limit is calculated
+## First-party limit
 
-Cursor's usage summary exposes an API dollar limit and three percents (`auto`, `api`, `total`). It does not expose the Cursor Models dollar cap.
-
-That cap is recovered as:
+Cursor exposes an API dollar cap and `auto` / `api` / `total` percents, not the Cursor Models dollar cap. It is recovered as:
 
 ```
 firstPartyLimit = apiLimit * (apiPercent - totalPercent) / (totalPercent - autoPercent)
 ```
 
-All percents are converted from `0–100` to `0–1` before this formula. Values are in dollars after dividing `plan.limit` by `100` (the API stores cents).
-
-If the formula cannot be evaluated yet (for example both auto and total percents are still zero), the last successful cap is reused from `localStorage` and the footer shows `cached limit`.
+Percents are converted from `0-100` to `0-1`. `plan.limit` is in cents, so it is divided by `100`. If the formula cannot run yet (percents still zero), the last cap is reused from `localStorage` and the footer shows `cached limit`.
 
 ## Privacy
 
-- Runs only on `https://cursor.com/dashboard/spending*`.
-- Uses a same-origin `fetch` with `credentials: 'include'`, so it sees the same session cookie the dashboard already has.
-- Does not send data to any third-party server.
-- Caches only the derived first-party dollar cap in `localStorage` under `cursor-usage-first-party-limit`.
+Same-origin `fetch` with your dashboard session. No third-party requests. Only the derived first-party cap is stored locally (`cursor-usage-first-party-limit`). Runs only on `https://cursor.com/dashboard/spending*`.
 
 ## Development
 
-The published artifact is `cursor-usage-monitor.user.js`. There is no build step.
-
-1. Edit the userscript.
-2. Bump `@version` (semver, for example `1.0.0` → `1.0.1`). Tampermonkey will not update if the version does not increase.
-3. Keep `@updateURL` and `@downloadURL` pointed at `main`.
-4. Commit and push to `main`.
-
-Optional editor checking: `jsconfig.json` enables `checkJs` for the userscript. In a checkout with TypeScript installed you can run:
+Edit `cursor-usage-monitor.user.js`, bump `@version`, push to `main`. No build step.
 
 ```bash
 npx --yes typescript --pretty false --noEmit -p jsconfig.json
