@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cursor Usage Limits
 // @namespace    https://github.com/AryaPaw/cursor-usage-monitor
-// @version      1.0.0
+// @version      1.1.0
 // @description  Shows actual Cursor Models and API usage limits on the spending dashboard
 // @author       AryaPaw
 // @license      MIT
@@ -21,11 +21,12 @@
 
     const REFRESH_INTERVAL = 60_000;
     const RELATIVE_TIME_INTERVAL = 1_000;
-    const STORAGE_KEY = 'cursor-usage-first-party-limit';
+    const COLLAPSED_KEY = 'cursor-usage-collapsed';
     const USAGE_SUMMARY_PATH = '/api/usage-summary';
 
     /**
      * @typedef {object} CursorPlanUsage
+     * @property {boolean} [enabled]
      * @property {number|string} [limit]
      * @property {number|string} [autoPercentUsed]
      * @property {number|string} [apiPercentUsed]
@@ -102,6 +103,7 @@
             day: 'numeric',
             hour: '2-digit',
             minute: '2-digit',
+            hour12: false,
         });
     }
 
@@ -116,10 +118,6 @@
             0,
             Math.floor((Date.now() - timestamp) / 1000)
         );
-
-        if (seconds < 5) {
-            return 'Updated just now';
-        }
 
         if (seconds < 60) {
             return `Updated ${seconds}s ago`;
@@ -173,39 +171,16 @@
     }
 
     /**
-     * @returns {number|null}
-     */
-    function getCachedFirstPartyLimit() {
-        const value = Number(
-            localStorage.getItem(STORAGE_KEY)
-        );
-
-        return Number.isFinite(value) && value > 0
-            ? value
-            : null;
-    }
-
-    /**
-     * @param {number} value
-     */
-    function cacheFirstPartyLimit(value) {
-        if (Number.isFinite(value) && value > 0) {
-            localStorage.setItem(
-                STORAGE_KEY,
-                String(value)
-            );
-        }
-    }
-
-    /**
      * @param {string} label
      * @param {number} used
      * @param {number} limit
      * @param {number} pct
+     * @param {boolean} [estimated]
      * @returns {string}
      */
-    function usageRow(label, used, limit, pct) {
+    function usageRow(label, used, limit, pct, estimated = false) {
         const remaining = Math.max(0, limit - used);
+        const mark = estimated ? '~' : '';
 
         const barWidth = Math.min(
             100,
@@ -221,11 +196,11 @@
 
                 <div class="cu-row-values">
                     <span>
-                        ${escapeHtml(money(used))} / ${escapeHtml(money(limit))}
+                        ${escapeHtml(mark + money(used))} / ${escapeHtml(mark + money(limit))}
                     </span>
 
                     <span class="cu-remaining">
-                        ${escapeHtml(money(remaining))} left
+                        ${escapeHtml(mark + money(remaining))} left
                     </span>
                 </div>
 
@@ -293,6 +268,19 @@
                 margin-bottom: 12px;
             }
 
+            #cursor-usage-panel.collapsed {
+                width: auto;
+            }
+
+            #cursor-usage-panel.collapsed .cu-title {
+                margin-bottom: 0;
+            }
+
+            #cursor-usage-panel.collapsed .cu-plan,
+            #cursor-usage-panel.collapsed #cursor-usage-body {
+                display: none;
+            }
+
             #cursor-usage-panel .cu-title-left {
                 display: flex;
                 align-items: center;
@@ -310,7 +298,14 @@
                 font-size: 11px;
             }
 
-            #cursor-usage-panel .cu-refresh {
+            #cursor-usage-panel .cu-actions {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                flex-shrink: 0;
+            }
+
+            #cursor-usage-panel .cu-btn {
                 display: flex;
                 align-items: center;
                 justify-content: center;
@@ -326,21 +321,37 @@
                 color: rgba(255, 255, 255, 0.72);
 
                 cursor: pointer;
-                font-size: 14px;
-                line-height: 1;
 
                 transition:
                     background 120ms ease,
-                    color 120ms ease,
-                    transform 120ms ease;
+                    color 120ms ease;
             }
 
-            #cursor-usage-panel .cu-refresh:hover {
+            #cursor-usage-panel .cu-btn:hover {
                 background: rgba(255, 255, 255, 0.13);
                 color: rgba(255, 255, 255, 0.95);
             }
 
-            #cursor-usage-panel .cu-refresh.loading {
+            #cursor-usage-panel .cu-icon {
+                display: block;
+                width: 13px;
+                height: 13px;
+                transform-origin: 50% 50%;
+            }
+
+            #cursor-usage-panel .cu-icon-expand {
+                display: none;
+            }
+
+            #cursor-usage-panel.collapsed .cu-icon-collapse {
+                display: none;
+            }
+
+            #cursor-usage-panel.collapsed .cu-icon-expand {
+                display: block;
+            }
+
+            #cursor-usage-panel .cu-refresh.loading .cu-icon {
                 animation: cu-spin 0.8s linear infinite;
             }
 
@@ -384,7 +395,6 @@
 
             #cursor-usage-panel .cu-remaining {
                 white-space: nowrap;
-                opacity: 0.8;
             }
 
             #cursor-usage-panel .cu-bar {
@@ -504,40 +514,84 @@
         let panel =
             document.getElementById('cursor-usage-panel');
 
-        if (panel) {
-            return panel;
-        }
+        if (panel) return panel;
 
         createStyles();
 
         panel = document.createElement('div');
         panel.id = 'cursor-usage-panel';
+        panel.innerHTML = `
+            <div class="cu-title">
+                <div class="cu-title-left">
+                    <strong>Cursor Usage</strong>
+                    <span class="cu-plan" hidden></span>
+                </div>
+                <div class="cu-actions">
+                    <button class="cu-btn cu-refresh" type="button" title="Refresh usage">
+                        <svg class="cu-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+                            <path d="M21 3v5h-5"/>
+                        </svg>
+                    </button>
+                    <button class="cu-btn cu-collapse" type="button" title="Collapse">
+                        <svg class="cu-icon cu-icon-collapse" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="m6 9 6 6 6-6"/>
+                        </svg>
+                        <svg class="cu-icon cu-icon-expand" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="m18 15-6-6-6 6"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div id="cursor-usage-body"></div>
+        `;
 
         document.body.appendChild(panel);
+
+        const collapsed = localStorage.getItem(COLLAPSED_KEY) === '1';
+        panel.classList.toggle('collapsed', collapsed);
+
+        const refresh =
+            /** @type {HTMLButtonElement|null} */
+            (panel.querySelector('.cu-refresh'));
+        const collapse =
+            /** @type {HTMLButtonElement|null} */
+            (panel.querySelector('.cu-collapse'));
+        const icon = refresh?.querySelector('.cu-icon');
+
+        if (collapse) {
+            collapse.title = collapsed ? 'Expand' : 'Collapse';
+            collapse.addEventListener('click', () => {
+                const next = panel.classList.toggle('collapsed');
+                localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0');
+                collapse.title = next ? 'Expand' : 'Collapse';
+            });
+        }
+
+        refresh?.addEventListener('click', update);
+        icon?.addEventListener('animationiteration', () => {
+            if (!refreshing) refresh?.classList.remove('loading');
+        });
 
         return panel;
     }
 
-    function bindRefreshButton() {
-        const button =
-            /** @type {HTMLButtonElement|null} */
-            (document.querySelector(
-                '#cursor-usage-panel .cu-refresh'
-            ));
+    /**
+     * @param {HTMLElement} panel
+     * @param {string|null|undefined} membership
+     * @param {string} html
+     */
+    function fillPanel(panel, membership, html) {
+        const plan =
+            /** @type {HTMLElement|null} */
+            (panel.querySelector('.cu-plan'));
+        const body = panel.querySelector('#cursor-usage-body');
 
-        if (
-            !button ||
-            button.dataset.bound === 'true'
-        ) {
-            return;
-        }
+        if (!plan || !body) return;
 
-        button.dataset.bound = 'true';
-
-        button.addEventListener(
-            'click',
-            update
-        );
+        plan.textContent = membership ?? '';
+        plan.hidden = !plan.textContent;
+        body.innerHTML = html;
     }
 
     function updateRelativeTime() {
@@ -585,13 +639,10 @@
 
     /**
      * @param {string|null|undefined} resetDate
-     * @param {boolean} [cachedLimit]
      * @returns {string}
      */
-    function renderFooter(resetDate, cachedLimit = false) {
-        const resetLabel = cachedLimit
-            ? `Reset ${formatResetDate(resetDate)} | cached limit`
-            : `Reset ${formatResetDate(resetDate)}`;
+    function renderFooter(resetDate) {
+        const resetLabel = `Reset ${formatResetDate(resetDate)}`;
 
         return `
             <div class="cu-footer">
@@ -635,15 +686,7 @@
         refreshing = true;
 
         const panel = createPanel();
-
-        const existingButton =
-            panel.querySelector('.cu-refresh');
-
-        if (existingButton) {
-            existingButton.classList.add(
-                'loading'
-            );
-        }
+        panel.querySelector('.cu-refresh')?.classList.add('loading');
 
         try {
             const response = await fetch(
@@ -667,34 +710,27 @@
             /** @type {CursorUsageSummary} */
             const data =
                 await response.json();
+            const plan = data.individualUsage?.plan;
 
-            const plan =
-                data.individualUsage?.plan;
-
-            if (!plan) {
-                throw new Error(
-                    'individualUsage.plan is missing'
+            if (!plan || plan.enabled === false) {
+                lastUpdatedAt = Date.now();
+                connectionOk = true;
+                fillPanel(
+                    panel,
+                    data.membershipType,
+                    `
+                    <div class="cu-error">No active subscription</div>
+                    ${renderFooter(data.billingCycleEnd)}
+                    `
                 );
+                return;
             }
 
             const apiLimit =
                 Number(plan.limit) / 100;
 
-            let firstPartyLimit =
+            const firstPartyLimit =
                 calculateFirstPartyLimit(data);
-
-            let cachedLimit = false;
-
-            if (firstPartyLimit) {
-                cacheFirstPartyLimit(
-                    firstPartyLimit
-                );
-            } else {
-                firstPartyLimit =
-                    getCachedFirstPartyLimit();
-
-                cachedLimit = true;
-            }
 
             if (!firstPartyLimit) {
                 throw new Error(
@@ -737,54 +773,16 @@
 
             lastUpdatedAt = Date.now();
             connectionOk = true;
-
-            panel.innerHTML = `
-                <div class="cu-title">
-                    <div class="cu-title-left">
-                        <strong>Cursor Usage</strong>
-
-                        <span class="cu-plan">
-                            ${escapeHtml(data.membershipType ?? '')}
-                        </span>
-                    </div>
-
-                    <button
-                        class="cu-refresh"
-                        type="button"
-                        title="Refresh usage"
-                    >
-                        ↻
-                    </button>
-                </div>
-
-                ${usageRow(
-                    'Cursor Models',
-                    firstPartyUsed,
-                    firstPartyLimit,
-                    firstPartyPct
-                )}
-
-                ${usageRow(
-                    'API / Other Models',
-                    apiUsed,
-                    apiLimit,
-                    apiPct
-                )}
-
-                ${usageRow(
-                    'Total',
-                    totalUsed,
-                    totalLimit,
-                    totalPct
-                )}
-
-                ${renderFooter(
-                    data.billingCycleEnd,
-                    cachedLimit
-                )}
-            `;
-
-            bindRefreshButton();
+            fillPanel(
+                panel,
+                data.membershipType,
+                `
+                ${usageRow('Cursor Models', firstPartyUsed, firstPartyLimit, firstPartyPct, true)}
+                ${usageRow('API / Other Models', apiUsed, apiLimit, apiPct)}
+                ${usageRow('Total', totalUsed, totalLimit, totalPct, true)}
+                ${renderFooter(data.billingCycleEnd)}
+                `
+            );
 
         } catch (error) {
             console.error(
@@ -794,57 +792,19 @@
 
             connectionOk = false;
 
-            const status =
-                document.getElementById(
-                    'cursor-usage-status'
-                );
-
-            /*
-             * If the panel already contains valid usage data,
-             * keep it visible and only switch the LED to red
-             */
-            if (status && lastUpdatedAt) {
-                updateStatusIndicator();
-            } else {
-                panel.innerHTML = `
-                    <div class="cu-title">
-                        <div class="cu-title-left">
-                            <strong>Cursor Usage</strong>
-                        </div>
-
-                        <button
-                            class="cu-refresh"
-                            type="button"
-                            title="Retry"
-                        >
-                            ↻
-                        </button>
-                    </div>
-
-                    <div class="cu-error">
-                        Failed to load usage
-                    </div>
-
+            if (!(document.getElementById('cursor-usage-status') && lastUpdatedAt)) {
+                fillPanel(
+                    panel,
+                    '',
+                    `
+                    <div class="cu-error">Failed to load usage</div>
                     ${renderFooter(null)}
-                `;
-
-                bindRefreshButton();
+                    `
+                );
             }
 
         } finally {
             refreshing = false;
-
-            const button =
-                panel.querySelector(
-                    '.cu-refresh'
-                );
-
-            if (button) {
-                button.classList.remove(
-                    'loading'
-                );
-            }
-
             updateStatusIndicator();
         }
     }
