@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cursor Usage Limits
 // @namespace    https://github.com/AryaPaw/cursor-usage-monitor
-// @version      1.1.0
+// @version      1.1.1
 // @description  Shows actual Cursor Models and API usage limits on the spending dashboard
 // @author       AryaPaw
 // @license      MIT
@@ -48,6 +48,8 @@
     let refreshing = false;
     /** @type {number|null} */
     let lastUpdatedAt = null;
+    /** @type {string|null} */
+    let lastResetAt = null;
     let connectionOk = false;
 
     /**
@@ -135,10 +137,55 @@
     }
 
     /**
-     * Cursor does not expose the first-party (Cursor Models) dollar cap
-     * directly. It can be recovered from the published percents:
-     *
-     *   apiLimit * (apiPercent - totalPercent) / (totalPercent - autoPercent)
+     * @param {string|null|undefined} resetDate
+     * @returns {string}
+     */
+    function formatCountdown(resetDate) {
+        if (!resetDate) return '—';
+
+        const end = new Date(resetDate).getTime();
+
+        if (!Number.isFinite(end)) return '—';
+
+        const ms = end - Date.now();
+
+        if (ms <= 0) return 'now';
+
+        const totalSec = Math.floor(ms / 1000);
+        const totalMin = Math.floor(totalSec / 60);
+        const totalHours = Math.floor(totalMin / 60);
+        const totalDays = Math.floor(totalHours / 24);
+        const months = Math.floor(totalDays / 30);
+        const hours = totalHours % 24;
+        const minutes = totalMin % 60;
+
+        /** @type {string[]} */
+        const parts = [];
+
+        if (totalDays >= 60) {
+            parts.push(`${months}mo`);
+            const days = totalDays % 30;
+            if (days > 0) parts.push(`${days}d`);
+        } else if (totalDays > 0) {
+            parts.push(`${totalDays}d`);
+            if (hours > 0) parts.push(`${hours}h`);
+        } else if (totalHours > 0) {
+            parts.push(`${totalHours}h`);
+            if (minutes > 0) parts.push(`${minutes}m`);
+        } else if (totalMin > 0) {
+            parts.push(`${totalMin}m`);
+        } else {
+            parts.push(`${totalSec}s`);
+        }
+
+        return `in ${parts.join(' ')}`;
+    }
+
+    /**
+     * Cursor does not publish the Cursor Models dollar cap. Inverting the
+     * three percents as a two-pool weighted average is only stable while
+     * Auto and Total differ enough. Near 100% Auto the recovered cap
+     * grows when API usage grows, so it is not a real limit.
      *
      * @param {CursorUsageSummary} data
      * @returns {number|null}
@@ -149,14 +196,12 @@
         if (!plan) return null;
 
         const apiLimit = Number(plan.limit) / 100;
-
         const auto = Number(plan.autoPercentUsed) / 100;
         const api = Number(plan.apiPercentUsed) / 100;
         const total = Number(plan.totalPercentUsed) / 100;
-
         const denominator = total - auto;
 
-        if (Math.abs(denominator) < 1e-12) {
+        if (Math.abs(denominator) < 0.03) {
             return null;
         }
 
@@ -171,16 +216,40 @@
     }
 
     /**
+     * @param {number} value
+     * @param {boolean} estimated
+     * @returns {string}
+     */
+    function moneyLabel(value, estimated) {
+        const formatted = money(value);
+
+        return estimated && Number.isFinite(value)
+            ? `~${formatted}`
+            : formatted;
+    }
+
+    /**
      * @param {string} label
      * @param {number} used
      * @param {number} limit
      * @param {number} pct
      * @param {boolean} [estimated]
+     * @param {number} [remaining]
      * @returns {string}
      */
-    function usageRow(label, used, limit, pct, estimated = false) {
-        const remaining = Math.max(0, limit - used);
-        const mark = estimated ? '~' : '';
+    function usageRow(
+        label,
+        used,
+        limit,
+        pct,
+        estimated = false,
+        remaining
+    ) {
+        const left = remaining !== undefined
+            ? remaining
+            : Number.isFinite(used) && Number.isFinite(limit)
+                ? Math.max(0, limit - used)
+                : NaN;
 
         const barWidth = Math.min(
             100,
@@ -196,11 +265,11 @@
 
                 <div class="cu-row-values">
                     <span>
-                        ${escapeHtml(mark + money(used))} / ${escapeHtml(mark + money(limit))}
+                        ${escapeHtml(moneyLabel(used, estimated))} / ${escapeHtml(moneyLabel(limit, estimated))}
                     </span>
 
                     <span class="cu-remaining">
-                        ${escapeHtml(mark + money(remaining))} left
+                        ${escapeHtml(moneyLabel(left, estimated))} left
                     </span>
                 </div>
 
@@ -428,64 +497,79 @@
                 border-top:
                     1px solid rgba(255, 255, 255, 0.08);
 
-                opacity: 0.52;
-                font-size: 10px;
+                color: rgba(255, 255, 255, 0.52);
+                font-size: 11px;
             }
 
             #cursor-usage-panel .cu-footer-left {
                 display: flex;
                 align-items: center;
-                gap: 6px;
+                gap: 4px;
 
                 min-width: 0;
+                overflow: visible;
             }
 
             #cursor-usage-panel .cu-status {
-                flex: 0 0 auto;
+                display: block;
+                flex: 0 0 24px;
 
-                width: 7px;
-                height: 7px;
+                width: 24px;
+                height: 24px;
+                margin-right: -2px;
 
-                border-radius: 50%;
-            }
-
-            #cursor-usage-panel .cu-status.ok {
-                background: #22c55e;
-
-                box-shadow:
-                    0 0 5px rgba(34, 197, 94, 0.8),
-                    0 0 10px rgba(34, 197, 94, 0.35);
-
-                animation:
-                    cu-status-pulse 2s ease-in-out infinite;
+                color: #22c55e;
+                overflow: visible;
             }
 
             #cursor-usage-panel .cu-status.error {
-                background: #ef4444;
-
-                box-shadow:
-                    0 0 5px rgba(239, 68, 68, 0.8),
-                    0 0 9px rgba(239, 68, 68, 0.3);
-
-                animation: none;
+                color: #ef4444;
             }
 
-            @keyframes cu-status-pulse {
-                0%,
-                100% {
-                    opacity: 0.55;
-                    transform: scale(0.9);
-                    box-shadow:
-                        0 0 4px rgba(34, 197, 94, 0.65),
-                        0 0 7px rgba(34, 197, 94, 0.25);
+            #cursor-usage-panel .cu-status svg {
+                display: block;
+                width: 24px;
+                height: 24px;
+                overflow: visible;
+            }
+
+            #cursor-usage-panel .cu-status-wave {
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 1;
+                transform-box: fill-box;
+                transform-origin: center;
+                animation: cu-status-wave 4s cubic-bezier(0, 0, 0.2, 1) infinite;
+            }
+
+            #cursor-usage-panel .cu-status-wave:nth-of-type(1) {
+                animation-delay: 0s;
+            }
+
+            #cursor-usage-panel .cu-status-wave:nth-of-type(2) {
+                animation-delay: -1.33s;
+            }
+
+            #cursor-usage-panel .cu-status-wave:nth-of-type(3) {
+                animation-delay: -2.66s;
+            }
+
+            @keyframes cu-status-wave {
+                0% {
+                    transform: scale(1);
+                    opacity: 0.75;
                 }
 
-                50% {
-                    opacity: 1;
-                    transform: scale(1.15);
-                    box-shadow:
-                        0 0 6px rgba(34, 197, 94, 0.95),
-                        0 0 13px rgba(34, 197, 94, 0.5);
+                100% {
+                    transform: scale(3);
+                    opacity: 0;
+                }
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+                #cursor-usage-panel .cu-status-wave {
+                    animation: none;
+                    display: none;
                 }
             }
 
@@ -494,6 +578,11 @@
             }
 
             #cursor-usage-panel .cu-reset {
+                display: flex;
+                flex-direction: column;
+                align-items: flex-end;
+                gap: 1px;
+
                 white-space: nowrap;
                 text-align: right;
             }
@@ -594,21 +683,31 @@
         body.innerHTML = html;
     }
 
-    function updateRelativeTime() {
-        const element =
+    function updateClocks() {
+        const updated =
             document.getElementById(
                 'cursor-usage-updated'
             );
 
-        if (!element) {
-            return;
+        if (updated) {
+            const text = formatRelativeTime(lastUpdatedAt);
+
+            if (updated.textContent !== text) {
+                updated.textContent = text;
+            }
         }
 
-        const text =
-            formatRelativeTime(lastUpdatedAt);
+        const countdown =
+            document.getElementById(
+                'cursor-usage-countdown'
+            );
 
-        if (element.textContent !== text) {
-            element.textContent = text;
+        if (countdown) {
+            const text = formatCountdown(lastResetAt);
+
+            if (countdown.textContent !== text) {
+                countdown.textContent = text;
+            }
         }
     }
 
@@ -642,6 +741,7 @@
      * @returns {string}
      */
     function renderFooter(resetDate) {
+        lastResetAt = resetDate ?? null;
         const resetLabel = `Reset ${formatResetDate(resetDate)}`;
 
         return `
@@ -659,7 +759,14 @@
                                 ? 'Cursor Usage API is working'
                                 : 'Cursor Usage API request failed'
                         }"
-                    ></span>
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle class="cu-status-wave" cx="12" cy="12" r="3" />
+                            <circle class="cu-status-wave" cx="12" cy="12" r="3" />
+                            <circle class="cu-status-wave" cx="12" cy="12" r="3" />
+                            <circle cx="12" cy="12" r="3" fill="currentColor" />
+                        </svg>
+                    </span>
 
                     <span
                         id="cursor-usage-updated"
@@ -673,6 +780,9 @@
 
                 <span class="cu-reset">
                     ${escapeHtml(resetLabel)}
+                    <span id="cursor-usage-countdown" class="cu-countdown">
+                        ${escapeHtml(formatCountdown(resetDate))}
+                    </span>
                 </span>
             </div>
         `;
@@ -728,48 +838,24 @@
 
             const apiLimit =
                 Number(plan.limit) / 100;
-
+            const firstPartyPct =
+                Number(plan.autoPercentUsed) || 0;
+            const apiPct =
+                Number(plan.apiPercentUsed) || 0;
+            const apiUsed = apiLimit * apiPct / 100;
             const firstPartyLimit =
                 calculateFirstPartyLimit(data);
 
-            if (!firstPartyLimit) {
-                throw new Error(
-                    'First-party limit cannot be determined yet'
-                );
+            let firstPartyUsed = NaN;
+            /** @type {number|undefined} */
+            let firstPartyLeft;
+
+            if (firstPartyLimit) {
+                firstPartyUsed =
+                    firstPartyLimit * firstPartyPct / 100;
+            } else {
+                firstPartyLeft = firstPartyPct >= 100 ? 0 : NaN;
             }
-
-            const firstPartyPct =
-                Number(
-                    plan.autoPercentUsed
-                ) || 0;
-
-            const apiPct =
-                Number(
-                    plan.apiPercentUsed
-                ) || 0;
-
-            const totalPct =
-                Number(
-                    plan.totalPercentUsed
-                ) || 0;
-
-            const firstPartyUsed =
-                firstPartyLimit *
-                firstPartyPct /
-                100;
-
-            const apiUsed =
-                apiLimit *
-                apiPct /
-                100;
-
-            const totalLimit =
-                firstPartyLimit +
-                apiLimit;
-
-            const totalUsed =
-                firstPartyUsed +
-                apiUsed;
 
             lastUpdatedAt = Date.now();
             connectionOk = true;
@@ -777,9 +863,8 @@
                 panel,
                 data.membershipType,
                 `
-                ${usageRow('Cursor Models', firstPartyUsed, firstPartyLimit, firstPartyPct, true)}
+                ${usageRow('Cursor Models', firstPartyUsed, firstPartyLimit ?? NaN, firstPartyPct, true, firstPartyLeft)}
                 ${usageRow('API / Other Models', apiUsed, apiLimit, apiPct)}
-                ${usageRow('Total', totalUsed, totalLimit, totalPct, true)}
                 ${renderFooter(data.billingCycleEnd)}
                 `
             );
@@ -834,7 +919,7 @@
         );
 
         setInterval(
-            updateRelativeTime,
+            updateClocks,
             RELATIVE_TIME_INTERVAL
         );
 
@@ -843,7 +928,7 @@
             () => {
                 if (!document.hidden) {
                     update();
-                    updateRelativeTime();
+                    updateClocks();
                 }
             }
         );
