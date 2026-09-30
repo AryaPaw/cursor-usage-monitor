@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cursor Usage Limits
 // @namespace    https://github.com/AryaPaw/cursor-usage-monitor
-// @version      1.1.1
+// @version      1.1.2
 // @description  Shows actual Cursor Models and API usage limits on the spending dashboard
 // @author       AryaPaw
 // @license      MIT
@@ -27,6 +27,7 @@
     /**
      * @typedef {object} CursorPlanUsage
      * @property {boolean} [enabled]
+     * @property {number|string} [used]
      * @property {number|string} [limit]
      * @property {number|string} [autoPercentUsed]
      * @property {number|string} [apiPercentUsed]
@@ -182,10 +183,9 @@
     }
 
     /**
-     * Cursor does not publish the Cursor Models dollar cap. Inverting the
-     * three percents as a two-pool weighted average is only stable while
-     * Auto and Total differ enough. Near 100% Auto the recovered cap
-     * grows when API usage grows, so it is not a real limit.
+     * Cursor Models dollar cap is not published. Prefer plan.used (cents)
+     * over autoPercent while that counter is not clamped to plan.limit.
+     * Percent inversion is only a fallback and is skipped near 100% Auto.
      *
      * @param {CursorUsageSummary} data
      * @returns {number|null}
@@ -195,13 +195,35 @@
 
         if (!plan) return null;
 
-        const apiLimit = Number(plan.limit) / 100;
-        const auto = Number(plan.autoPercentUsed) / 100;
+        const used = Number(plan.used);
+        const includedLimit = Number(plan.limit);
+        const autoPct = Number(plan.autoPercentUsed);
+        const auto = autoPct / 100;
         const api = Number(plan.apiPercentUsed) / 100;
         const total = Number(plan.totalPercentUsed) / 100;
+        const apiLimit = includedLimit / 100;
+
+        if (
+            autoPct > 1e-9 &&
+            used > 0 &&
+            Number.isFinite(used) &&
+            Number.isFinite(includedLimit) &&
+            used < includedLimit
+        ) {
+            const fromUsed = used / autoPct;
+
+            if (Number.isFinite(fromUsed) && fromUsed > 0) {
+                return fromUsed;
+            }
+        }
+
+        if (auto >= 0.97) {
+            return null;
+        }
+
         const denominator = total - auto;
 
-        if (Math.abs(denominator) < 0.03) {
+        if (Math.abs(denominator) < 1e-12) {
             return null;
         }
 
